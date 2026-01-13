@@ -1,0 +1,181 @@
+name: Cleanup GitHub Actions Caches
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch name to clean caches for (default: main)'
+        required: false
+        type: string
+        default: 'main'
+      limit:
+        description: 'Maximum number of caches to delete (default: 100)'
+        required: false
+        type: string
+        default: '100'
+      dry_run:
+        description: 'Dry run mode (list caches but do not delete)'
+        required: false
+        type: boolean
+        default: true
+  # Uncomment to enable scheduled runs:
+  # schedule:
+  #   - cron: '0 3 * * 0'  # Every Sunday at 3 AM UTC
+
+jobs:
+  cleanup-caches:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Set cleanup parameters
+        id: params
+        run: |
+          BRANCH="${{ inputs.branch }}"
+          if [ -z "$BRANCH" ] || [ "$BRANCH" = "null" ]; then
+            BRANCH="main"
+          fi
+
+          LIMIT="${{ inputs.limit }}"
+          if [ -z "$LIMIT" ] || [ "$LIMIT" = "null" ]; then
+            LIMIT="100"
+          fi
+
+          DRY_RUN="${{ inputs.dry_run }}"
+          if [ -z "$DRY_RUN" ] || [ "$DRY_RUN" = "null" ]; then
+            DRY_RUN="true"
+          fi
+
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "limit=$LIMIT" >> $GITHUB_OUTPUT
+          echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+          echo "Branch: $BRANCH"
+          echo "Limit: $LIMIT"
+          echo "Dry run mode: $DRY_RUN"
+
+      - name: Fetch list of cache keys
+        id: list_caches
+        run: |
+          BRANCH="${{ steps.params.outputs.branch }}"
+          LIMIT="${{ steps.params.outputs.limit }}"
+
+          # Convert branch name to ref format
+          if [[ "$BRANCH" != refs/* ]]; then
+            REF="refs/heads/$BRANCH"
+          else
+            REF="$BRANCH"
+          fi
+
+          echo "Fetching cache keys for ref: $REF"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+
+          # Get cache list and extract IDs
+          CACHE_KEYS=$(gh cache list --ref "$REF" --limit "$LIMIT" --json id,key,ref,sizeInBytes,createdAt,lastAccessedAt --jq '.[].id' 2>&1) || true
+
+          if [ -z "$CACHE_KEYS" ] || echo "$CACHE_KEYS" | grep -qi "no caches found\|not found\|error"; then
+            echo "No caches found for ref: $REF"
+            echo "" > /tmp/cache_keys.txt
+            echo "cache_count=0" >> $GITHUB_OUTPUT
+          else
+            echo "$CACHE_KEYS" > /tmp/cache_keys.txt
+            CACHE_COUNT=$(echo "$CACHE_KEYS" | grep -v '^$' | wc -l)
+            echo "Found $CACHE_COUNT cache entries"
+            echo "cache_count=$CACHE_COUNT" >> $GITHUB_OUTPUT
+          fi
+
+          # Also get detailed info for summary
+          gh cache list --ref "$REF" --limit "$LIMIT" --json id,key,ref,sizeInBytes,createdAt,lastAccessedAt > /tmp/cache_details.json 2>&1 || echo "[]" > /tmp/cache_details.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Display cache information
+        run: |
+          BRANCH="${{ steps.params.outputs.branch }}"
+          REF="${{ steps.list_caches.outputs.ref }}"
+
+          if [ -f /tmp/cache_details.json ] && [ -s /tmp/cache_details.json ]; then
+            echo "## Cache Details for $REF"
+            echo ""
+
+            # Calculate total size
+            TOTAL_SIZE=$(cat /tmp/cache_details.json | jq '[.[].sizeInBytes] | add' 2>/dev/null || echo "0")
+            TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
+
+            echo "Total caches: $(cat /tmp/cache_details.json | jq 'length')"
+            echo "Total size: ${TOTAL_SIZE_MB} MB"
+            echo ""
+            echo "Cache entries:"
+            cat /tmp/cache_details.json | jq -r '.[] | "  - Key: \(.key)\n    Size: \(.sizeInBytes / 1024 / 1024 | floor) MB\n    Created: \(.createdAt)\n    Last accessed: \(.lastAccessedAt)"' || true
+          else
+            echo "No cache details available"
+          fi
+
+      - name: Delete caches
+        if: steps.list_caches.outputs.cache_count > 0
+        run: |
+          DRY_RUN="${{ steps.params.outputs.dry_run }}"
+          REF="${{ steps.list_caches.outputs.ref }}"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "🔍 DRY RUN MODE - No caches will be deleted"
+            echo "Caches that would be deleted:"
+            while IFS= read -r cache_id; do
+              if [ -n "$cache_id" ]; then
+                CACHE_INFO=$(gh cache list --ref "$REF" --limit 1000 --json id,key,sizeInBytes --jq ".[] | select(.id == \"$cache_id\")" 2>/dev/null || echo '{}')
+                KEY=$(echo "$CACHE_INFO" | jq -r '.key // "unknown"' 2>/dev/null)
+                SIZE=$(echo "$CACHE_INFO" | jq -r '.sizeInBytes // 0' 2>/dev/null)
+                SIZE_MB=$((SIZE / 1024 / 1024))
+                echo "  - Cache ID: $cache_id, Key: $KEY, Size: ${SIZE_MB} MB"
+              fi
+            done < /tmp/cache_keys.txt
+          else
+            echo "🗑️  Deleting caches..."
+            DELETED=0
+            FAILED=0
+
+            # Setting this to not fail the workflow while deleting cache keys
+            set +e
+
+            while IFS= read -r cache_id; do
+              if [ -n "$cache_id" ]; then
+                echo "Deleting cache ID: $cache_id"
+                if gh cache delete "$cache_id" 2>/dev/null; then
+                  echo "✅ Successfully deleted cache ID: $cache_id"
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "❌ Failed to delete cache ID: $cache_id"
+                  FAILED=$((FAILED + 1))
+                fi
+              fi
+            done < /tmp/cache_keys.txt
+
+            set -e
+
+            echo "Deletion summary:"
+            echo "  Successfully deleted: $DELETED"
+            echo "  Failed: $FAILED"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Summary
+        run: |
+          echo "## Cache Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ steps.params.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ref:** ${{ steps.list_caches.outputs.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Caches found:** ${{ steps.list_caches.outputs.cache_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry run mode:** ${{ steps.params.outputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Limit:** ${{ steps.params.outputs.limit }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.list_caches.outputs.cache_count }}" -eq 0 ]; then
+            echo "✅ No caches found to clean up!" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.params.outputs.dry_run }}" = "true" ]; then
+            echo "🔍 Run with dry_run=false to actually delete the identified caches." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Cache cleanup completed!" >> $GITHUB_STEP_SUMMARY
+          fi
