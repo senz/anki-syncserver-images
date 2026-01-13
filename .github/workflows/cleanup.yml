@@ -1,0 +1,229 @@
+name: Cleanup Container Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_run_id_days:
+        description: 'Keep run_id-tagged images newer than this many days (default: 7)'
+        required: false
+        type: string
+        default: '7'
+      dry_run:
+        description: 'Dry run mode (list images but do not delete)'
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    # Run every Sunday at 2 AM UTC
+    # - cron: '0 2 * * 0'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: anki-syncserver
+  PACKAGE_TYPE: container
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set cleanup parameters
+        id: params
+        run: |
+          KEEP_DAYS="${{ inputs.keep_run_id_days }}"
+          if [ -z "$KEEP_DAYS" ] || [ "$KEEP_DAYS" = "null" ]; then
+            KEEP_DAYS="7"
+          fi
+          
+          DRY_RUN="${{ inputs.dry_run }}"
+          if [ -z "$DRY_RUN" ] || [ "$DRY_RUN" = "null" ]; then
+            DRY_RUN="true"
+          fi
+          
+          echo "keep_days=$KEEP_DAYS" >> $GITHUB_OUTPUT
+          echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+          echo "Keep run_id images newer than $KEEP_DAYS days"
+          echo "Dry run mode: $DRY_RUN"
+
+      - name: List all package versions
+        id: list_versions
+        run: |
+          echo "Fetching all package versions..."
+          PACKAGE_NAME="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
+          PACKAGE_NAME_ESCAPED=$(echo "$PACKAGE_NAME" | sed 's|/|%2F|g')
+          
+          # Try user packages first, then org packages
+          if gh api "/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions" --jq 'length' >/dev/null 2>&1; then
+            API_PATH="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions"
+            echo "Using user packages API"
+          else
+            API_PATH="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions"
+            echo "Using organization packages API"
+          fi
+          
+          # Get all package versions
+          VERSIONS=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "$API_PATH" \
+            --paginate \
+            --jq '.[] | {id: .id, name: .name, updated_at: .updated_at, tags: [.metadata.container.tags[]?]}')
+          
+          echo "$VERSIONS" > /tmp/versions.json
+          echo "$API_PATH" > /tmp/api_path.txt
+          
+          VERSION_COUNT=$(echo "$VERSIONS" | jq -s 'length')
+          echo "Found $VERSION_COUNT package versions"
+          echo "version_count=$VERSION_COUNT" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Identify images to delete
+        id: identify
+        run: |
+          KEEP_DAYS=${{ steps.params.outputs.keep_days }}
+          # Calculate cutoff timestamp (portable date calculation)
+          CURRENT_TIMESTAMP=$(date +%s)
+          CUTOFF_TIMESTAMP=$((CURRENT_TIMESTAMP - KEEP_DAYS * 86400))
+          
+          CUTOFF_DATE=$(date -u -d "@$CUTOFF_TIMESTAMP" +"%Y-%m-%d %H:%M:%S UTC" 2>/dev/null || date -u -r "$CUTOFF_TIMESTAMP" +"%Y-%m-%d %H:%M:%S UTC" 2>/dev/null || echo "N/A")
+          echo "Cutoff timestamp: $CUTOFF_TIMESTAMP ($CUTOFF_DATE)"
+          
+          # Patterns to identify temporary/cleanup candidates
+          # 1. Images with run_id pattern: {version}-{variant}-{arch}-{run_id}
+          # 2. Images with run_id in multi-arch manifest: {version}-{variant}-{run_id}
+          # 3. Untagged images (no tags array or empty tags)
+          
+          TO_DELETE=()
+          TO_KEEP=()
+          
+          while IFS= read -r version_data; do
+            VERSION_ID=$(echo "$version_data" | jq -r '.id')
+            VERSION_NAME=$(echo "$version_data" | jq -r '.name')
+            UPDATED_AT=$(echo "$version_data" | jq -r '.updated_at')
+            TAGS=$(echo "$version_data" | jq -r '.tags[]?' | tr '\n' ' ')
+            
+            # Convert updated_at to timestamp using jq (handles ISO 8601)
+            UPDATED_TIMESTAMP=$(echo "$version_data" | jq -r 'if .updated_at then (.updated_at | fromdateiso8601) else 0 end')
+            if [ -z "$UPDATED_TIMESTAMP" ] || [ "$UPDATED_TIMESTAMP" = "null" ]; then
+              UPDATED_TIMESTAMP=0
+            fi
+            AGE_DAYS=$(( (CURRENT_TIMESTAMP - UPDATED_TIMESTAMP) / 86400 ))
+            
+            # Check if untagged
+            TAG_COUNT=$(echo "$version_data" | jq '.tags | length')
+            if [ "$TAG_COUNT" -eq 0 ]; then
+              echo "🗑️  Untagged image (ID: $VERSION_ID, Updated: $UPDATED_AT, Age: ${AGE_DAYS}d)"
+              TO_DELETE+=("$VERSION_ID")
+              continue
+            fi
+            
+            # Check for run_id pattern in tags
+            HAS_RUN_ID_TAG=false
+            for tag in $TAGS; do
+              # Pattern: {version}-{variant}-{arch}-{run_id} or {version}-{variant}-{run_id}
+              if echo "$tag" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-(standard|distroless)-(amd64|arm64)-[0-9]+$' || \
+                 echo "$tag" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-(standard|distroless)-[0-9]+$'; then
+                HAS_RUN_ID_TAG=true
+                break
+              fi
+            done
+            
+            if [ "$HAS_RUN_ID_TAG" = true ]; then
+              if [ "$UPDATED_TIMESTAMP" -lt "$CUTOFF_TIMESTAMP" ]; then
+                echo "🗑️  Old run_id-tagged image (ID: $VERSION_ID, Tags: $TAGS, Age: ${AGE_DAYS}d)"
+                TO_DELETE+=("$VERSION_ID")
+              else
+                echo "✅ Keeping recent run_id-tagged image (ID: $VERSION_ID, Tags: $TAGS, Age: ${AGE_DAYS}d)"
+                TO_KEEP+=("$VERSION_ID")
+              fi
+            else
+              echo "✅ Keeping tagged image (ID: $VERSION_ID, Tags: $TAGS)"
+              TO_KEEP+=("$VERSION_ID")
+            fi
+          done < <(cat /tmp/versions.json | jq -c '.')
+          
+          # Save IDs to delete
+          if [ ${#TO_DELETE[@]} -gt 0 ]; then
+            printf '%s\n' "${TO_DELETE[@]}" > /tmp/to_delete.txt
+            echo "delete_count=${#TO_DELETE[@]}" >> $GITHUB_OUTPUT
+          else
+            touch /tmp/to_delete.txt
+            echo "delete_count=0" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Summary:"
+          echo "  Images to delete: ${#TO_DELETE[@]}"
+          echo "  Images to keep: ${#TO_KEEP[@]}"
+
+      - name: Delete identified images
+        if: steps.identify.outputs.delete_count > 0
+        run: |
+          DRY_RUN=${{ steps.params.outputs.dry_run }}
+          PACKAGE_NAME="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
+          PACKAGE_NAME_ESCAPED=$(echo "$PACKAGE_NAME" | sed 's|/|%2F|g')
+          API_PATH=$(cat /tmp/api_path.txt)
+          API_BASE=$(echo "$API_PATH" | sed 's|/versions$||')
+          
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "🔍 DRY RUN MODE - No images will be deleted"
+            echo "Images that would be deleted:"
+            while IFS= read -r version_id; do
+              if [ -n "$version_id" ]; then
+                VERSION_DATA=$(gh api \
+                  -H "Accept: application/vnd.github+json" \
+                  "${API_BASE}/versions/$version_id" \
+                  --jq '{id: .id, name: .name, updated_at: .updated_at, tags: [.metadata.container.tags[]?]}' 2>/dev/null || echo '{}')
+                
+                TAGS=$(echo "$VERSION_DATA" | jq -r '.tags[]?' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+                echo "  - Version ID: $version_id, Tags: [$TAGS]"
+              fi
+            done < /tmp/to_delete.txt
+          else
+            echo "🗑️  Deleting images..."
+            DELETED=0
+            FAILED=0
+            
+            while IFS= read -r version_id; do
+              if [ -n "$version_id" ]; then
+                echo "Deleting version ID: $version_id"
+                if gh api \
+                  -X DELETE \
+                  -H "Accept: application/vnd.github+json" \
+                  "${API_BASE}/versions/$version_id" 2>/dev/null; then
+                  echo "✅ Successfully deleted version ID: $version_id"
+                  DELETED=$((DELETED + 1))
+                else
+                  echo "❌ Failed to delete version ID: $version_id"
+                  FAILED=$((FAILED + 1))
+                fi
+              fi
+            done < /tmp/to_delete.txt
+            
+            echo "Deletion summary:"
+            echo "  Successfully deleted: $DELETED"
+            echo "  Failed: $FAILED"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total package versions found:** ${{ steps.list_versions.outputs.version_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Images identified for deletion:** ${{ steps.identify.outputs.delete_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry run mode:** ${{ steps.params.outputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Keep run_id images newer than:** ${{ steps.params.outputs.keep_days }} days" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.identify.outputs.delete_count }}" -eq 0 ]; then
+            echo "✅ No images to clean up!" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.params.outputs.dry_run }}" = "true" ]; then
+            echo "🔍 Run with dry_run=false to actually delete the identified images." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Cleanup completed!" >> $GITHUB_STEP_SUMMARY
+          fi
+
