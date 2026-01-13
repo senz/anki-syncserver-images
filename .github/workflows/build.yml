@@ -1,0 +1,239 @@
+name: Build and Push Anki Syncserver Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag from official repository (e.g., 25.09.2)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: anki-syncserver
+  OFFICIAL_REPO: ankitects/anki
+
+jobs:
+  build-images-amd64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    strategy:
+      matrix:
+        variant: [standard, distroless]
+      fail-fast: true
+
+    steps:
+      - name: Checkout official repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.OFFICIAL_REPO }}
+          path: anki-repo
+          fetch-depth: 0
+
+      - name: Hard checkout version
+        id: checkout
+        run: |
+          cd anki-repo
+          git fetch --all --tags
+          git checkout -f ${{ inputs.version }}
+          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "commit_timestamp=$(git log -1 --format=%ct HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.version }}-${{ matrix.variant }}-amd64-${{ github.run_id }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.OFFICIAL_REPO }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ steps.checkout.outputs.commit_sha }}
+            org.opencontainers.image.authors=${{ github.repository_owner }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./anki-repo/docs/syncserver
+          file: ./anki-repo/docs/syncserver/Dockerfile${{ matrix.variant == 'distroless' && '.distroless' || '' }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ANKI_VERSION=${{ inputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: true
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Output image digest
+        run: |
+          echo "Image digest: ${{ steps.build.outputs.digest }}"
+          echo "Image tags: ${{ steps.meta.outputs.tags }}"
+
+  build-images-arm64:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    strategy:
+      matrix:
+        variant: [standard, distroless]
+      fail-fast: true
+
+    steps:
+      - name: Checkout official repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.OFFICIAL_REPO }}
+          path: anki-repo
+          fetch-depth: 0
+
+      - name: Hard checkout version
+        id: checkout
+        run: |
+          cd anki-repo
+          git fetch --all --tags
+          git checkout -f ${{ inputs.version }}
+          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "commit_timestamp=$(git log -1 --format=%ct HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.version }}-${{ matrix.variant }}-arm64-${{ github.run_id }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.OFFICIAL_REPO }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ steps.checkout.outputs.commit_sha }}
+            org.opencontainers.image.authors=${{ github.repository_owner }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./anki-repo/docs/syncserver
+          file: ./anki-repo/docs/syncserver/Dockerfile${{ matrix.variant == 'distroless' && '.distroless' || '' }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ANKI_VERSION=${{ inputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: true
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Output image digest
+        run: |
+          echo "Image digest: ${{ steps.build.outputs.digest }}"
+          echo "Image tags: ${{ steps.meta.outputs.tags }}"
+
+  create-manifests:
+    needs: [build-images-amd64, build-images-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    strategy:
+      matrix:
+        variant: [standard, distroless]
+      fail-fast: true
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: anki-syncserver
+
+    steps:
+      - name: Extract major version
+        id: version
+        run: |
+          MAJOR_VERSION=$(echo "${{ inputs.version }}" | cut -d. -f1)
+          echo "major=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for images to be available
+        run: |
+          echo "Waiting for all images to be pushed to registry..."
+          sleep 10
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.version }}-${{ matrix.variant }}-${{ github.run_id }}
+            type=raw,value=${{ inputs.version }}-${{ matrix.variant }}
+            type=raw,value=${{ matrix.variant == 'standard' && 'edge' || 'edge-distroless' }}
+            type=raw,value=${{ steps.version.outputs.major }}
+
+      - name: Create and push multi-arch manifest
+        shell: bash
+        run: |
+          TAGS_ARGS=""
+          for tag in $(echo "${{ steps.meta.outputs.tags }}" | tr ',' ' '); do
+            TAGS_ARGS="$TAGS_ARGS --tag $tag"
+          done
+          docker buildx imagetools create \
+            $TAGS_ARGS \
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}-${{ matrix.variant }}-amd64-${{ github.run_id }} \
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}-${{ matrix.variant }}-arm64-${{ github.run_id }}

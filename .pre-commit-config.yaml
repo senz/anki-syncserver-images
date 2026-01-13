@@ -1,0 +1,24 @@
+repos:
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [-c=.yamllint.yml]
+        files: \.(yaml|yml)$
+
+  - repo: https://github.com/rhysd/actionlint.git
+    rev: v1.7.4
+    hooks:
+      - id: actionlint
+        files: \.github/workflows/.*\.(yml|yaml)$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        args: [--unsafe]
+        files: \.(yaml|yml)$
+      - id: check-json
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
