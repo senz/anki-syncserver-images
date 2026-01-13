@@ -50,6 +50,62 @@ docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-standard
 docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-distroless
 ```
 
+### Deploying with Portainer
+
+This repository includes `docker-compose.yml` and `stack.env` files for easy deployment via [Portainer](https://www.portainer.io/).
+
+#### Option 1: Deploy from Git Repository (Recommended)
+
+1. In Portainer, go to **Stacks** → **Add stack**
+2. Give your stack a name (e.g., `anki-syncserver`)
+3. Select **Git Repository**
+4. Enter the repository URL: `https://github.com/YOUR_USERNAME/anki-syncserver-image`
+5. Set **Compose path** to: `docker-compose.yml`
+6. Configure environment variables:
+   - Either use **Load variables from .env file** and upload `stack.env`
+   - Or set variables individually in Portainer
+7. **Required**: Set at least one user credential:
+   ```
+   SYNC_USER1=username:password
+   ```
+8. **Optional**: Configure additional settings in `stack.env`:
+   - `IMAGE_NAME` - Docker image to use (default: `ghcr.io/senz/anki-syncserver:edge`)
+   - `SYNC_PORT` - Host port mapping (default: `8383`)
+   - `MAX_SYNC_PAYLOAD_MEGS` - Maximum sync payload size in megabytes (default: `1024`)
+   - `PASSWORDS_HASHED` - Set to `1` if using hashed passwords
+9. Ensure the data directory exists on the host:
+   ```
+   /portainer/Files/AppData/Config/anki-syncserver
+   ```
+   The compose file uses a bind mount to this directory for persistent data storage.
+10. Click **Deploy the stack**
+
+#### Option 2: Manual Docker Compose
+
+You can also use the compose file directly:
+
+```bash
+# Edit stack.env with your settings (SYNC_USER1 is required)
+nano stack.env
+
+# Ensure data directory exists
+mkdir -p /portainer/Files/AppData/Config/anki-syncserver
+
+# Deploy
+docker compose up -d
+```
+
+#### Configuration Notes
+
+- **Port**: Default host port is `8383` (container port is `8080`)
+- **Data Storage**: Uses bind mount to `/portainer/Files/AppData/Config/anki-syncserver` for persistent data
+- **User Credentials**: Format is `username:password`. At least `SYNC_USER1` must be set
+- **Image**: Default image is `ghcr.io/senz/anki-syncserver:edge`. Update `IMAGE_NAME` in `stack.env` to use a different image or version
+
+For more information, see:
+- [Portainer Stack Documentation](https://docs.portainer.io/user/docker/stacks/add#option-3-git-repository)
+- [Anki Syncserver Documentation](https://github.com/ankitects/anki/tree/main/docs/syncserver)
+
 ### Tag Format
 
 Multi-arch tags (automatically select correct architecture):
