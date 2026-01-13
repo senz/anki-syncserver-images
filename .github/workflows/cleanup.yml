@@ -55,6 +55,8 @@ jobs:
           # Package name for API should not include registry prefix
           PACKAGE_NAME="${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
           PACKAGE_NAME_ESCAPED=$(echo "$PACKAGE_NAME" | sed 's|/|%2F|g')
+          echo "Package name: $PACKAGE_NAME"
+          echo "Package name escaped: $PACKAGE_NAME_ESCAPED"
 
           # Try user packages first, then org packages
           if gh api "/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions" --jq 'length' >/dev/null 2>&1; then
@@ -67,20 +69,66 @@ jobs:
             echo "Using organization packages API"
           fi
 
-          # Get all package versions (handle case where package doesn't exist yet)
-          if VERSIONS=$(gh api \
+          echo "API path: $API_PATH"
+          echo "API base: $API_BASE"
+
+          # First, try to get raw response to debug
+          echo "Fetching raw API response..."
+          RAW_RESPONSE=$(gh api \
             -H "Accept: application/vnd.github+json" \
             "$API_PATH" \
-            --paginate \
-            --jq '.[] | {id: .id, name: .name, updated_at: .updated_at, tags: [.metadata.container.tags[]?]}' 2>/dev/null); then
-            echo "$VERSIONS" > /tmp/versions.json
+            --paginate 2>&1) || true
+
+          if [ -z "$RAW_RESPONSE" ] || echo "$RAW_RESPONSE" | grep -q "Not Found"; then
+            echo "⚠️  API returned error or empty response:"
+            echo "$RAW_RESPONSE" | head -20
+            echo "Package not found or no versions available yet"
+            echo "[]" > /tmp/versions.json
+            echo "$API_PATH" > /tmp/api_path.txt
+            echo "$API_BASE" > /tmp/api_base.txt
+            echo "version_count=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if response is an array
+          if ! echo "$RAW_RESPONSE" | jq -e '. | type == "array"' >/dev/null 2>&1; then
+            echo "⚠️  API response is not an array. First 500 chars:"
+            echo "$RAW_RESPONSE" | head -c 500
+            echo ""
+            echo "Package not found or no versions available yet"
+            echo "[]" > /tmp/versions.json
+            echo "$API_PATH" > /tmp/api_path.txt
+            echo "$API_BASE" > /tmp/api_base.txt
+            echo "version_count=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Get all package versions with proper error handling
+          # Handle cases where tags might be null, missing, or empty
+          if VERSIONS=$(echo "$RAW_RESPONSE" | jq -c '.[] | {
+            id: .id,
+            name: .name,
+            updated_at: .updated_at,
+            tags: (if .metadata.container.tags then .metadata.container.tags else [] end)
+          }' 2>&1); then
+            if [ -z "$VERSIONS" ]; then
+              echo "⚠️  No versions found in response (empty array)"
+              echo "[]" > /tmp/versions.json
+            else
+              echo "$VERSIONS" | jq -s '.' > /tmp/versions.json
+              # Debug: show first few versions
+              echo "Sample versions (first 3):"
+              cat /tmp/versions.json | jq '.[0:3]' || true
+            fi
             echo "$API_PATH" > /tmp/api_path.txt
             echo "$API_BASE" > /tmp/api_base.txt
 
-            VERSION_COUNT=$(echo "$VERSIONS" | jq -s 'length')
+            VERSION_COUNT=$(cat /tmp/versions.json | jq 'length')
             echo "Found $VERSION_COUNT package versions"
             echo "version_count=$VERSION_COUNT" >> $GITHUB_OUTPUT
           else
+            echo "⚠️  Error processing versions with jq:"
+            echo "$VERSIONS" | head -20
             echo "Package not found or no versions available yet"
             echo "[]" > /tmp/versions.json
             echo "$API_PATH" > /tmp/api_path.txt
@@ -108,6 +156,19 @@ jobs:
 
           TO_DELETE=()
           TO_KEEP=()
+
+          # Check if versions file exists and has content
+          if [ ! -f /tmp/versions.json ] || [ ! -s /tmp/versions.json ]; then
+            echo "⚠️  No versions file found or file is empty"
+            echo "delete_count=0" >> $GITHUB_OUTPUT
+            echo "Summary:"
+            echo "  Images to delete: 0"
+            echo "  Images to keep: 0"
+            exit 0
+          fi
+
+          VERSION_FILE_COUNT=$(cat /tmp/versions.json | jq 'length')
+          echo "Processing $VERSION_FILE_COUNT versions from file..."
 
           # Process each version (jq -c '.[]' outputs nothing for empty arrays)
           while IFS= read -r version_data || [ -n "$version_data" ]; do
