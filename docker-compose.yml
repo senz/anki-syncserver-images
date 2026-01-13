@@ -22,12 +22,6 @@ services:
       # See: https://docs.ankiweb.net/sync-server.html
     env_file:
       - stack.env
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
 # volumes:
 #   anki-syncserver-data:
