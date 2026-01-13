@@ -224,7 +224,7 @@ jobs:
             type=raw,value=${{ inputs.version }}-${{ matrix.variant }}-${{ github.run_id }}
             type=raw,value=${{ inputs.version }}-${{ matrix.variant }}
             type=raw,value=${{ matrix.variant == 'standard' && 'edge' || 'edge-distroless' }}
-            type=raw,value=${{ steps.version.outputs.major }}
+            type=raw,value=${{ steps.version.outputs.major }}${{ matrix.variant == 'distroless' && '-distroless' || '' }}
 
       - name: Create and push multi-arch manifest
         shell: bash
