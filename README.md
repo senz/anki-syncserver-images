@@ -44,10 +44,10 @@ After successful build, images are available in GHCR:
 
 ```bash
 # Standard image
-docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-standard
+docker pull ghcr.io/senz/anki-syncserver:25.09.2-standard
 
 # Distroless image
-docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-distroless
+docker pull ghcr.io/senz/anki-syncserver:25.09.2-distroless
 ```
 
 ### Deploying with Portainer
@@ -59,7 +59,7 @@ This repository includes `docker-compose.yml` and `stack.env` files for easy dep
 1. In Portainer, go to **Stacks** → **Add stack**
 2. Give your stack a name (e.g., `anki-syncserver`)
 3. Select **Git Repository**
-4. Enter the repository URL: `https://github.com/YOUR_USERNAME/anki-syncserver-image`
+4. Enter the repository URL: `https://github.com/senz/anki-syncserver-image`
 5. Set **Compose path** to: `docker-compose.yml`
 6. Configure environment variables:
    - Either use **Load variables from .env file** and upload `stack.env`
@@ -111,32 +111,32 @@ For more information, see:
 Multi-arch tags (automatically select correct architecture):
 - `VERSION-variant-RUN_ID` - specific build
   ```bash
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-standard-1234567890
+  docker pull ghcr.io/senz/anki-syncserver:25.09.2-standard-1234567890
   ```
 - `VERSION-variant` - latest for version
   ```bash
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-standard
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-distroless
+  docker pull ghcr.io/senz/anki-syncserver:25.09.2-standard
+  docker pull ghcr.io/senz/anki-syncserver:25.09.2-distroless
   ```
 - `edge` / `edge-distroless` - latest builds
   ```bash
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:edge
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:edge-distroless
+  docker pull ghcr.io/senz/anki-syncserver:edge
+  docker pull ghcr.io/senz/anki-syncserver:edge-distroless
   ```
 - `MAJOR` / `MAJOR-distroless` - major version tags
   ```bash
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25-distroless
+  docker pull ghcr.io/senz/anki-syncserver:25
+  docker pull ghcr.io/senz/anki-syncserver:25-distroless
   ```
 
 Architecture-specific tags:
 - `VERSION-variant-amd64-RUN_ID` - amd64 build
   ```bash
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-standard-amd64-1234567890
+  docker pull ghcr.io/senz/anki-syncserver:25.09.2-standard-amd64-1234567890
   ```
 - `VERSION-variant-arm64-RUN_ID` - arm64 build
   ```bash
-  docker pull ghcr.io/YOUR_USERNAME/anki-syncserver:25.09.2-standard-arm64-1234567890
+  docker pull ghcr.io/senz/anki-syncserver:25.09.2-standard-arm64-1234567890
   ```
 
 ## Development
