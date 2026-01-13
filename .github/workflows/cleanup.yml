@@ -109,7 +109,13 @@ jobs:
           TO_DELETE=()
           TO_KEEP=()
 
-          while IFS= read -r version_data; do
+          # Process each version (jq -c '.[]' outputs nothing for empty arrays)
+          while IFS= read -r version_data || [ -n "$version_data" ]; do
+            # Skip if version_data is empty or not a valid JSON object
+            if [ -z "$version_data" ] || ! echo "$version_data" | jq -e '.id' >/dev/null 2>&1; then
+              continue
+            fi
+
             VERSION_ID=$(echo "$version_data" | jq -r '.id')
             VERSION_NAME=$(echo "$version_data" | jq -r '.name')
             UPDATED_AT=$(echo "$version_data" | jq -r '.updated_at')
@@ -153,7 +159,7 @@ jobs:
               echo "✅ Keeping tagged image (ID: $VERSION_ID, Tags: $TAGS)"
               TO_KEEP+=("$VERSION_ID")
             fi
-          done < <(cat /tmp/versions.json | jq -c '.')
+          done < <(cat /tmp/versions.json | jq -c '.[]')
 
           # Save IDs to delete
           if [ ${#TO_DELETE[@]} -gt 0 ]; then
