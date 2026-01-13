@@ -26,6 +26,7 @@ jobs:
       matrix:
         variant: [standard, distroless]
       fail-fast: true
+      max-parallel: 1
 
     steps:
       - name: Checkout official repository
@@ -110,6 +111,7 @@ jobs:
       matrix:
         variant: [standard, distroless]
       fail-fast: true
+      max-parallel: 1
 
     steps:
       - name: Checkout official repository
