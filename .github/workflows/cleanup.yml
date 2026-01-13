@@ -52,31 +52,41 @@ jobs:
         id: list_versions
         run: |
           echo "Fetching all package versions..."
-          PACKAGE_NAME="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
+          # Package name for API should not include registry prefix
+          PACKAGE_NAME="${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
           PACKAGE_NAME_ESCAPED=$(echo "$PACKAGE_NAME" | sed 's|/|%2F|g')
 
           # Try user packages first, then org packages
           if gh api "/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions" --jq 'length' >/dev/null 2>&1; then
             API_PATH="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions"
+            API_BASE="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}"
             echo "Using user packages API"
           else
             API_PATH="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions"
+            API_BASE="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}"
             echo "Using organization packages API"
           fi
 
-          # Get all package versions
-          VERSIONS=$(gh api \
+          # Get all package versions (handle case where package doesn't exist yet)
+          if VERSIONS=$(gh api \
             -H "Accept: application/vnd.github+json" \
             "$API_PATH" \
             --paginate \
-            --jq '.[] | {id: .id, name: .name, updated_at: .updated_at, tags: [.metadata.container.tags[]?]}')
+            --jq '.[] | {id: .id, name: .name, updated_at: .updated_at, tags: [.metadata.container.tags[]?]}' 2>/dev/null); then
+            echo "$VERSIONS" > /tmp/versions.json
+            echo "$API_PATH" > /tmp/api_path.txt
+            echo "$API_BASE" > /tmp/api_base.txt
 
-          echo "$VERSIONS" > /tmp/versions.json
-          echo "$API_PATH" > /tmp/api_path.txt
-
-          VERSION_COUNT=$(echo "$VERSIONS" | jq -s 'length')
-          echo "Found $VERSION_COUNT package versions"
-          echo "version_count=$VERSION_COUNT" >> $GITHUB_OUTPUT
+            VERSION_COUNT=$(echo "$VERSIONS" | jq -s 'length')
+            echo "Found $VERSION_COUNT package versions"
+            echo "version_count=$VERSION_COUNT" >> $GITHUB_OUTPUT
+          else
+            echo "Package not found or no versions available yet"
+            echo "[]" > /tmp/versions.json
+            echo "$API_PATH" > /tmp/api_path.txt
+            echo "$API_BASE" > /tmp/api_base.txt
+            echo "version_count=0" >> $GITHUB_OUTPUT
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -162,10 +172,7 @@ jobs:
         if: steps.identify.outputs.delete_count > 0
         run: |
           DRY_RUN=${{ steps.params.outputs.dry_run }}
-          PACKAGE_NAME="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
-          PACKAGE_NAME_ESCAPED=$(echo "$PACKAGE_NAME" | sed 's|/|%2F|g')
-          API_PATH=$(cat /tmp/api_path.txt)
-          API_BASE=$(echo "$API_PATH" | sed 's|/versions$||')
+          API_BASE=$(cat /tmp/api_base.txt)
 
           if [ "$DRY_RUN" = "true" ]; then
             echo "🔍 DRY RUN MODE - No images will be deleted"
