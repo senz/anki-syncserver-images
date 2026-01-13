@@ -52,21 +52,33 @@ jobs:
         id: list_versions
         run: |
           echo "Fetching all package versions..."
-          # Package name for API should not include registry prefix
-          PACKAGE_NAME="${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
-          PACKAGE_NAME_ESCAPED=$(echo "$PACKAGE_NAME" | sed 's|/|%2F|g')
-          echo "Package name: $PACKAGE_NAME"
-          echo "Package name escaped: $PACKAGE_NAME_ESCAPED"
+          # For organization packages, API path should use only package name (without owner)
+          # For user packages, it might include owner/package format
+          PACKAGE_NAME_FULL="${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}"
+          PACKAGE_NAME_FULL_ESCAPED=$(echo "$PACKAGE_NAME_FULL" | sed 's|/|%2F|g')
+          echo "Package name (full): $PACKAGE_NAME_FULL"
+          echo "Package name (simple): $IMAGE_NAME"
 
-          # Try user packages first, then org packages
-          if gh api "/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions" --jq 'length' >/dev/null 2>&1; then
-            API_PATH="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions"
-            API_BASE="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}"
-            echo "Using user packages API"
-          else
-            API_PATH="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}/versions"
-            API_BASE="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_ESCAPED}"
+          # Try user packages first (with owner/package format)
+          if gh api "/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_FULL_ESCAPED}/versions" --jq 'length' >/dev/null 2>&1; then
+            API_PATH="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_FULL_ESCAPED}/versions"
+            API_BASE="/user/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_FULL_ESCAPED}"
+            echo "Using user packages API (with owner)"
+          # Try user packages with simple name
+          elif gh api "/user/packages/${PACKAGE_TYPE}/${IMAGE_NAME}/versions" --jq 'length' >/dev/null 2>&1; then
+            API_PATH="/user/packages/${PACKAGE_TYPE}/${IMAGE_NAME}/versions"
+            API_BASE="/user/packages/${PACKAGE_TYPE}/${IMAGE_NAME}"
+            echo "Using user packages API (simple name)"
+          # Try organization packages (only simple name, no owner in path)
+          elif gh api "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${IMAGE_NAME}/versions" --jq 'length' >/dev/null 2>&1; then
+            API_PATH="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${IMAGE_NAME}/versions"
+            API_BASE="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${IMAGE_NAME}"
             echo "Using organization packages API"
+          else
+            # Fallback: try org API with full name (for backwards compatibility)
+            API_PATH="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_FULL_ESCAPED}/versions"
+            API_BASE="/orgs/${GITHUB_REPOSITORY_OWNER}/packages/${PACKAGE_TYPE}/${PACKAGE_NAME_FULL_ESCAPED}"
+            echo "Using organization packages API (fallback with full name)"
           fi
 
           echo "API path: $API_PATH"
