@@ -239,7 +239,7 @@ jobs:
           done
           docker buildx imagetools create \
             $TAGS_ARGS \
-            --annotation org.opencontainers.image.description="Anki Syncserver container image (${{ matrix.variant }} variant) for syncing Anki collections" \
-            --annotation org.opencontainers.image.licenses=AGPL-3.0-only \
+            --annotation index:org.opencontainers.image.description="Anki Syncserver container image (${{ matrix.variant }} variant) for syncing Anki collections" \
+            --annotation index:org.opencontainers.image.licenses=AGPL-3.0-only \
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}-${{ matrix.variant }}-amd64-${{ github.run_id }} \
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}-${{ matrix.variant }}-arm64-${{ github.run_id }}
